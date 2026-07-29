@@ -1,4 +1,4 @@
-﻿# rag-textbook-qa
+
 # RAG Textbook Q&A
 
 A Retrieval-Augmented Generation system for answering questions from uploaded textbooks/syllabus PDFs, with page and chapter-level citations.
