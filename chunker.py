@@ -21,16 +21,17 @@ def chunk_text(text, chunk_size=400, overlap=50):
 def chunk_pages(pages, chunk_size=400, overlap=50):
     """
     Takes the output of extract_pages() and returns a list of chunks,
-    each still tagged with its page number.
-    [{"page_num": 1, "chunk": "..."}, {"page_num": 1, "chunk": "..."}, ...]
+    each still tagged with its page number and its chunk index within that page.
+    [{"page_num": 1, "chunk_index": 0, "chunk": "..."}, ...]
     """
     all_chunks = []
 
     for page in pages:
         page_chunks = chunk_text(page["text"], chunk_size, overlap)
-        for chunk in page_chunks:
+        for i, chunk in enumerate(page_chunks):
             all_chunks.append({
                 "page_num": page["page_num"],
+                "chunk_index": i,
                 "chunk": chunk
             })
 
@@ -41,4 +42,5 @@ if __name__ == "__main__":
     pages = extract_pages("data/sample_textbook.pdf")
     chunks = chunk_pages(pages)
     print(f"Total chunks created: {len(chunks)}")
-    print(chunks[25])
+    print(chunks[0])
+    print(chunks[24])  # sanity check a chunk deeper in the book
