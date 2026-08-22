@@ -49,7 +49,7 @@ Answer using only the information in the context above. If the answer isn't in t
 
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}]
         )
     except Exception as e:
