@@ -51,7 +51,6 @@ if not available_docs:
 else:
     selected_doc = st.selectbox("Select a document:", available_docs)
 
-    # Two tabs: Q&A and Quiz
     tab1, tab2 = st.tabs(["Ask a Question", "Generate Quiz"])
 
     with tab1:
@@ -67,11 +66,12 @@ else:
                 st.warning("Please enter a question first.")
 
     with tab2:
+        topic = st.text_input("Enter a topic (optional — leave blank for a general quiz):")
         num_questions = st.slider("Number of questions:", min_value=3, max_value=10, value=5)
 
         if st.button("Generate Quiz"):
             with st.spinner("Generating quiz..."):
-                result = generate_quiz(selected_doc, num_questions=num_questions)
+                result = generate_quiz(selected_doc, num_questions=num_questions, topic=topic if topic else None)
 
             if "error" in result:
                 st.error(result["error"])
