@@ -1,4 +1,5 @@
 import faiss
+import hashlib
 import numpy as np
 import pickle
 import os
@@ -19,6 +20,14 @@ def sanitize_filename(name):
     name = os.path.splitext(name)[0]  # remove .pdf extension
     name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)  # replace unsafe chars
     return name
+
+
+def short_file_hash(file_bytes, length=8):
+    """
+    Returns the first `length` characters of the SHA-256 hash of the file's bytes.
+    Same content always gives the same hash, whatever the filename is.
+    """
+    return hashlib.sha256(file_bytes).hexdigest()[:length]
 
 
 def build_index(chunks):
@@ -81,6 +90,17 @@ def list_available_documents():
     files = os.listdir(INDEX_DIR)
     doc_names = [f[:-6] for f in files if f.endswith(".index")]  # strip ".index"
     return doc_names
+
+
+def find_document_by_hash(short_hash):
+    """
+    Returns the name of an already-processed document whose name ends
+    with this hash, or None if this PDF hasn't been processed before.
+    """
+    for name in list_available_documents():
+        if name.endswith(f"_{short_hash}"):
+            return name
+    return None
 
 
 def search(query_embedding, index, metadata, top_k=3):

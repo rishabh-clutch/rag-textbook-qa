@@ -1,14 +1,24 @@
 import streamlit as st
 import os
+import re
 
 from pdf_parser import extract_pages
 from chunker import chunk_pages
 from embedder import embed_chunks
-from vector_store import build_index, save_index, list_available_documents
+from vector_store import (
+    build_index, save_index, list_available_documents,
+    sanitize_filename, short_file_hash, find_document_by_hash
+)
 from answer_generator import generate_answer
 from quiz_generator import generate_quiz
 
 st.set_page_config(page_title="RAG Textbook Q&A", page_icon="📚")
+
+
+def strip_hash(doc_name):
+    """Removes the trailing _<8 hex chars> hash, e.g. 'OOP_Notes_a3f9c2d1' -> 'OOP_Notes'."""
+    return re.sub(r"_[0-9a-f]{8}$", "", doc_name)
+
 
 st.title("📚 RAG Textbook Q&A")
 st.write("Upload a textbook PDF, then ask questions and get answers with page citations.")
@@ -25,21 +35,31 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
     if st.button("Process PDF"):
-        with st.spinner("Processing PDF — this may take a minute..."):
-            os.makedirs("data", exist_ok=True)
-            temp_path = os.path.join("data", uploaded_file.name)
-            with open(temp_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+        file_hash = short_file_hash(uploaded_file.getvalue())
+        existing_doc = find_document_by_hash(file_hash)
 
-            pages = extract_pages(temp_path)
-            chunks = chunk_pages(pages)
-            chunks = embed_chunks(chunks)
-            index, metadata = build_index(chunks)
-            save_index(index, metadata, uploaded_file.name)
+        if existing_doc:
+            # Same content already indexed (even if the filename differs) — skip the work.
+            # No st.rerun() here, so this message stays on screen.
+            st.info(f"This PDF was already processed as '{existing_doc}'. Select it below.")
+        else:
+            doc_name = f"{sanitize_filename(uploaded_file.name)}_{file_hash}"
 
-        st.success(f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!")
-        st.session_state.uploader_key += 1
-        st.rerun()
+            with st.spinner("Processing PDF — this may take a minute..."):
+                os.makedirs("data", exist_ok=True)
+                temp_path = os.path.join("data", uploaded_file.name)
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+
+                pages = extract_pages(temp_path)
+                chunks = chunk_pages(pages)
+                chunks = embed_chunks(chunks)
+                index, metadata = build_index(chunks)
+                save_index(index, metadata, doc_name)
+
+            st.success(f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!")
+            st.session_state.uploader_key += 1
+            st.rerun()
 
 st.divider()
 
@@ -49,7 +69,14 @@ available_docs = list_available_documents()
 if not available_docs:
     st.info("No documents processed yet. Upload a PDF above to get started.")
 else:
-    selected_doc = st.selectbox("Select a document:", available_docs)
+    short_names = [strip_hash(doc) for doc in available_docs]
+
+    def display_name(doc_name):
+        # Hide the hash, unless another document would show the same name.
+        short = strip_hash(doc_name)
+        return short if short_names.count(short) == 1 else doc_name
+
+    selected_doc = st.selectbox("Select a document:", available_docs, format_func=display_name)
 
     tab1, tab2 = st.tabs(["Ask a Question", "Generate Quiz"])
 
