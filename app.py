@@ -3,7 +3,10 @@ import os
 import re
 import traceback
 
-from pdf_parser import extract_pages
+from groq import RateLimitError
+
+from pdf_parser import extract_pages, ocr_pages, OCR_CACHE_DIR
+from ocr import transcribe_image, MAX_OCR_PAGES, PageTooDenseError
 from chunker import chunk_pages
 from embedder import embed_chunks
 from vector_store import (
@@ -22,7 +25,9 @@ def strip_hash(doc_name):
 
 
 st.title("📚 RAG Textbook Q&A")
-st.write("Upload a textbook PDF, then ask questions and get answers with page citations.")
+st.write("Upload a textbook PDF or a photo of notes, then ask questions and get answers with page citations.")
+
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 # --- PDF Upload Section ---
 if "uploader_key" not in st.session_state:
@@ -33,55 +38,105 @@ if "flash_message" in st.session_state:
     st.success(st.session_state.pop("flash_message"))
 
 uploaded_file = st.file_uploader(
-    "Upload a textbook PDF",
-    type=["pdf"],
+    "Upload a textbook PDF or an image (JPG/PNG)",
+    type=["pdf", "jpg", "jpeg", "png"],
     key=f"uploader_{st.session_state.uploader_key}"
 )
 
 if uploaded_file is not None:
-    if st.button("Process PDF"):
+    if st.button("Process file"):
         file_hash = short_file_hash(uploaded_file.getvalue())
         existing_doc = find_document_by_hash(file_hash)
 
         if existing_doc:
             # Same content already indexed (even if the filename differs) — skip the work.
             # No st.rerun() here, so this message stays on screen.
-            st.info(f"This PDF was already processed as '{existing_doc}'. Select it below.")
+            st.info(f"This file was already processed as '{existing_doc}'. Select it below.")
         else:
             doc_name = f"{sanitize_filename(uploaded_file.name)}_{file_hash}"
+            is_image = uploaded_file.name.lower().endswith(IMAGE_EXTENSIONS)
+            too_many_for_ocr = False
+            chunks = []
 
             try:
-                with st.spinner("Processing PDF — this may take a minute..."):
+                with st.spinner("Processing — this may take a minute..."):
                     os.makedirs("data", exist_ok=True)
                     temp_path = os.path.join("data", uploaded_file.name)
                     with open(temp_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
-                    pages = extract_pages(temp_path)
-                    chunks = chunk_pages(pages)
+                    # An image is one page that always needs OCR.
+                    if is_image:
+                        pages = [{"page_num": 1, "text": "", "needs_ocr": True}]
+                    else:
+                        pages = extract_pages(temp_path)
 
-                    # Only embed and save if there's real text to work with.
-                    if chunks:
-                        chunks = embed_chunks(chunks)
-                        index, metadata = build_index(chunks)
-                        save_index(index, metadata, doc_name)
+                    ocr_count = sum(p["needs_ocr"] for p in pages)
+
+                    # Check the limit before sending anything to the vision model.
+                    if ocr_count > MAX_OCR_PAGES:
+                        too_many_for_ocr = True
+                    else:
+                        if ocr_count:
+                            slow_note = "OCR is slow on the free tier, so this may take a few minutes."
+                            progress = st.progress(0.0, text=f"Reading pages with OCR: 0 of {ocr_count}. {slow_note}")
+
+                            def show_progress(done, total):
+                                progress.progress(
+                                    done / total, text=f"Reading pages with OCR: {done} of {total}. {slow_note}"
+                                )
+
+                            if is_image:
+                                pages[0]["text"] = transcribe_image(uploaded_file.getvalue())
+                                show_progress(1, 1)
+                            else:
+                                ocr_pages(temp_path, pages, on_progress=show_progress,
+                                          cache_dir=os.path.join(OCR_CACHE_DIR, file_hash))
+                            progress.empty()
+
+                        chunks = chunk_pages(pages)
+
+                        # Only embed and save if there's real text to work with.
+                        if chunks:
+                            chunks = embed_chunks(chunks)
+                            index, metadata = build_index(chunks)
+                            save_index(index, metadata, doc_name)
+            except PageTooDenseError as e:
+                traceback.print_exc()
+                # Waiting won't help here, so don't suggest trying again.
+                st.error(f"{e} The free OCR tier can't read it. Try a lower-detail scan of that page.")
+            except RateLimitError:
+                traceback.print_exc()
+                st.error(
+                    "The OCR service's free usage limit was reached. Please wait a minute and "
+                    "click Process again. Pages already read are saved, so it continues where it stopped."
+                )
             except Exception:
                 traceback.print_exc()  # full error in the terminal, for debugging
                 st.error(
-                    "Something went wrong while processing this PDF. It may be damaged "
+                    "Something went wrong while processing this file. It may be damaged "
                     "or password-protected. Please try a different file."
                 )
             else:
                 # st.rerun() stays outside the try, so the except can never swallow it.
-                if not chunks:
-                    # No st.rerun() here, so the error stays on screen.
+                # The error branches don't rerun, so their messages stay on screen.
+                if too_many_for_ocr:
                     st.error(
-                        "No readable text was found in this PDF. It may be a scanned document "
-                        "(images of pages). Try a PDF with selectable text."
+                        f"{ocr_count} pages in this PDF are scanned or unreadable and would need OCR, "
+                        f"but the app's limit is {MAX_OCR_PAGES} pages (OCR is slow on the free tier). "
+                        f"For bigger PDFs, run this in the terminal: python process_pdf.py \"{uploaded_file.name}\""
+                    )
+                elif not chunks:
+                    st.error(
+                        "No readable text was found in this file, even after OCR. "
+                        "Try a clearer scan or photo."
                     )
                 else:
+                    pages_with_text = sum(1 for p in pages if p["text"].strip())
+                    ocr_note = f" ({ocr_count} read with OCR)" if ocr_count else ""
                     st.session_state.flash_message = (
-                        f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!"
+                        f"Processed {pages_with_text} pages{ocr_note} into {len(chunks)} chunks. "
+                        "Ready for questions!"
                     )
                     st.session_state.uploader_key += 1
                     st.rerun()

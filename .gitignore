@@ -4,3 +4,4 @@ __pycache__/
 .env
 data/*.pdf
 indexes/
+ocr_cache/
