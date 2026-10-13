@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import re
+import traceback
 
 from pdf_parser import extract_pages
 from chunker import chunk_pages
@@ -27,6 +28,10 @@ st.write("Upload a textbook PDF, then ask questions and get answers with page ci
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
+# Show the success message saved before the last st.rerun(), then forget it.
+if "flash_message" in st.session_state:
+    st.success(st.session_state.pop("flash_message"))
+
 uploaded_file = st.file_uploader(
     "Upload a textbook PDF",
     type=["pdf"],
@@ -45,31 +50,41 @@ if uploaded_file is not None:
         else:
             doc_name = f"{sanitize_filename(uploaded_file.name)}_{file_hash}"
 
-            with st.spinner("Processing PDF — this may take a minute..."):
-                os.makedirs("data", exist_ok=True)
-                temp_path = os.path.join("data", uploaded_file.name)
-                with open(temp_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+            try:
+                with st.spinner("Processing PDF — this may take a minute..."):
+                    os.makedirs("data", exist_ok=True)
+                    temp_path = os.path.join("data", uploaded_file.name)
+                    with open(temp_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
 
-                pages = extract_pages(temp_path)
-                chunks = chunk_pages(pages)
+                    pages = extract_pages(temp_path)
+                    chunks = chunk_pages(pages)
 
-                # Only embed and save if there's real text to work with.
-                if chunks:
-                    chunks = embed_chunks(chunks)
-                    index, metadata = build_index(chunks)
-                    save_index(index, metadata, doc_name)
-
-            if not chunks:
-                # No st.rerun() here, so the error stays on screen.
+                    # Only embed and save if there's real text to work with.
+                    if chunks:
+                        chunks = embed_chunks(chunks)
+                        index, metadata = build_index(chunks)
+                        save_index(index, metadata, doc_name)
+            except Exception:
+                traceback.print_exc()  # full error in the terminal, for debugging
                 st.error(
-                    "No readable text was found in this PDF. It may be a scanned document "
-                    "(images of pages). Try a PDF with selectable text."
+                    "Something went wrong while processing this PDF. It may be damaged "
+                    "or password-protected. Please try a different file."
                 )
             else:
-                st.success(f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!")
-                st.session_state.uploader_key += 1
-                st.rerun()
+                # st.rerun() stays outside the try, so the except can never swallow it.
+                if not chunks:
+                    # No st.rerun() here, so the error stays on screen.
+                    st.error(
+                        "No readable text was found in this PDF. It may be a scanned document "
+                        "(images of pages). Try a PDF with selectable text."
+                    )
+                else:
+                    st.session_state.flash_message = (
+                        f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!"
+                    )
+                    st.session_state.uploader_key += 1
+                    st.rerun()
 
 st.divider()
 

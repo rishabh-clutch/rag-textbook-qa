@@ -58,16 +58,32 @@ def build_index(chunks):
 def save_index(index, metadata, doc_name):
     """
     Saves the index and metadata using a filename derived from doc_name.
+    Writes to temp files first, then renames them, so a failure halfway
+    never leaves a .index without its _metadata.pkl.
     """
     os.makedirs(INDEX_DIR, exist_ok=True)
     safe_name = sanitize_filename(doc_name)
 
     index_path = os.path.join(INDEX_DIR, f"{safe_name}.index")
     metadata_path = os.path.join(INDEX_DIR, f"{safe_name}_metadata.pkl")
+    # Temp names don't end in ".index", so list_available_documents ignores them.
+    index_tmp = index_path + ".tmp"
+    metadata_tmp = metadata_path + ".tmp"
 
-    faiss.write_index(index, index_path)
-    with open(metadata_path, "wb") as f:
-        pickle.dump(metadata, f)
+    try:
+        with open(metadata_tmp, "wb") as f:
+            pickle.dump(metadata, f)
+        faiss.write_index(index, index_tmp)
+
+        # Rename metadata first and the .index last: once the .index exists,
+        # the document is visible, and its metadata is guaranteed to be there.
+        os.replace(metadata_tmp, metadata_path)
+        os.replace(index_tmp, index_path)
+    except Exception:
+        for path in (index_tmp, metadata_tmp):
+            if os.path.exists(path):
+                os.remove(path)
+        raise
 
 
 def load_index(doc_name):
