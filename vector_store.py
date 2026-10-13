@@ -110,11 +110,18 @@ def find_document_by_hash(short_hash):
 
 
 def search(query_embedding, index, metadata, top_k=3):
+    # Never ask FAISS for more results than the index holds.
+    k = min(top_k, index.ntotal)
+    if k == 0:
+        return []
+
     query_vector = np.array([query_embedding]).astype("float32")
-    distances, indices = index.search(query_vector, top_k)
+    distances, indices = index.search(query_vector, k)
 
     results = []
     for idx, distance in zip(indices[0], distances[0]):
+        if idx == -1:
+            continue  # FAISS uses -1 for "no neighbour"; metadata[-1] would silently return the last chunk
         result = metadata[idx].copy()
         result["distance"] = float(distance)
         results.append(result)
