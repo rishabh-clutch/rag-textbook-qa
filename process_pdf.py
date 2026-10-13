@@ -12,10 +12,10 @@ import os
 import sys
 import time
 
-from groq import RateLimitError
+from groq import InternalServerError, RateLimitError
 
 from pdf_parser import extract_pages, ocr_pages, OCR_CACHE_DIR
-from ocr import PageTooDenseError
+from ocr import PageTooDenseError, DailyLimitError
 from chunker import chunk_pages
 from embedder import embed_chunks
 from vector_store import (
@@ -50,11 +50,22 @@ def main():
         def show_progress(done, total):
             print(f"  OCR page {done}/{total}  ({time.time() - start:.0f}s elapsed)")
 
+        cache_dir = os.path.join(OCR_CACHE_DIR, file_hash)
         try:
-            ocr_pages(pdf_path, pages, on_progress=show_progress,
-                      cache_dir=os.path.join(OCR_CACHE_DIR, file_hash))
+            ocr_pages(pdf_path, pages, on_progress=show_progress, cache_dir=cache_dir)
         except PageTooDenseError as e:
             sys.exit(f"\n{e}\nRunning again won't help: the free OCR tier can't read that page.")
+        except DailyLimitError as e:
+            saved = len([f for f in os.listdir(cache_dir) if f.endswith(".txt")]) if os.path.isdir(cache_dir) else 0
+            sys.exit(
+                f"\n{e}\n{saved} of {ocr_count} pages are saved. "
+                "Run the same command tomorrow to continue from there."
+            )
+        except InternalServerError:
+            sys.exit(
+                "\nGroq is over capacity right now (it kept failing after retries).\n"
+                "Pages read so far are saved. Run the same command again in a few minutes."
+            )
         except RateLimitError as e:
             sys.exit(
                 f"\nStopped by Groq's rate limit: {e}\n"

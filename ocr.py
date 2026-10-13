@@ -6,7 +6,7 @@ import time
 
 import numpy as np
 from dotenv import load_dotenv
-from groq import Groq, RateLimitError
+from groq import Groq, InternalServerError, RateLimitError
 from PIL import Image, ImageOps
 
 load_dotenv()
@@ -46,6 +46,13 @@ class RequestTooLargeError(Exception):
     The expected output for one request is bigger than the whole per-minute token limit,
     so Groq will never accept it, however long we wait. The image must be split instead.
     """
+
+
+class DailyLimitError(Exception):
+    """Groq's daily token (or request) limit for the vision model is used up; it resets over 24 hours."""
+
+    def __init__(self, message="The daily OCR limit on Groq's free tier has been reached."):
+        super().__init__(message)
 
 
 class PageTooDenseError(Exception):
@@ -150,7 +157,11 @@ def _retry_delay(error, attempt):
 
 
 def _call_vision_model(jpeg):
-    """One vision request, retried with increasing delays on ordinary rate limits."""
+    """
+    One vision request, retried with increasing delays on per-minute rate limits (429)
+    and on temporary server errors like 503 "over capacity". Not retried, because
+    waiting a few seconds can't fix them: "request too large" and the daily limit.
+    """
     data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
     messages = [{
         "role": "user",
@@ -169,14 +180,21 @@ def _call_vision_model(jpeg):
                 max_tokens=MAX_OUTPUT_TOKENS,
             )
             break
-        except RateLimitError as e:
-            # Waiting can't fix a request that is bigger than the whole per-minute limit.
-            if "request too large" in str(e).lower():
-                raise RequestTooLargeError(str(e)) from e
+        except (RateLimitError, InternalServerError) as e:
+            if isinstance(e, RateLimitError):
+                message = str(e).lower()
+                # Waiting can't fix a request that is bigger than the whole per-minute limit.
+                if "request too large" in message:
+                    raise RequestTooLargeError(str(e)) from e
+                # e.g. "tokens per day (TPD)": only resets over hours.
+                if " per day" in message:
+                    raise DailyLimitError() from e
+
             delay = _retry_delay(e, attempt)
             if attempt == MAX_RETRIES or delay > MAX_RETRY_WAIT:
                 raise
-            print(f"Rate limited by Groq, retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})")
+            reason = "Rate limited by Groq" if isinstance(e, RateLimitError) else "Groq is over capacity"
+            print(f"{reason}, retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})")
             time.sleep(delay)
 
     text = response.choices[0].message.content or ""

@@ -3,10 +3,10 @@ import os
 import re
 import traceback
 
-from groq import RateLimitError
+from groq import InternalServerError, RateLimitError
 
 from pdf_parser import extract_pages, ocr_pages, OCR_CACHE_DIR
-from ocr import transcribe_image, MAX_OCR_PAGES, PageTooDenseError
+from ocr import transcribe_image, MAX_OCR_PAGES, PageTooDenseError, DailyLimitError
 from chunker import chunk_pages
 from embedder import embed_chunks
 from vector_store import (
@@ -105,6 +105,15 @@ if uploaded_file is not None:
                 traceback.print_exc()
                 # Waiting won't help here, so don't suggest trying again.
                 st.error(f"{e} The free OCR tier can't read it. Try a lower-detail scan of that page.")
+            except DailyLimitError as e:
+                traceback.print_exc()
+                st.error(
+                    f"{e} Please try again tomorrow. For PDFs, pages already read are saved, "
+                    "so it continues where it stopped."
+                )
+            except InternalServerError:
+                traceback.print_exc()
+                st.error("The OCR service is temporarily overloaded. Please try again in a few minutes.")
             except RateLimitError:
                 traceback.print_exc()
                 st.error(
