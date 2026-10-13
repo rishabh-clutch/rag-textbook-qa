@@ -31,7 +31,13 @@ def short_file_hash(file_bytes, length=8):
 
 
 def build_index(chunks):
-    embeddings = np.array([item["embedding"] for item in chunks]).astype("float32")
+    if not chunks:
+        raise ValueError(
+            "Cannot build an index from 0 chunks. The PDF may have no extractable text "
+            "(e.g. a scanned document)."
+        )
+
+    embeddings =np.array([item["embedding"] for item in chunks]).astype("float32")
 
     dimension = embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)

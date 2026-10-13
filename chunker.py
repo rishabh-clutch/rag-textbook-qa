@@ -18,10 +18,13 @@ def chunk_text(text, chunk_size=400, overlap=50):
     return chunks
 
 
-def chunk_pages(pages, chunk_size=400, overlap=50):
+def chunk_pages(pages, chunk_size=400, overlap=50, min_words=20):
     """
     Takes the output of extract_pages() and returns a list of chunks,
     each still tagged with its page number and its chunk index within that page.
+    Chunks with fewer than min_words real words are skipped, since these
+    are usually near-empty/whitespace-heavy extraction artifacts (common on
+    pages with dense equations, tables, or diagrams).
     [{"page_num": 1, "chunk_index": 0, "chunk": "..."}, ...]
     """
     all_chunks = []
@@ -29,6 +32,8 @@ def chunk_pages(pages, chunk_size=400, overlap=50):
     for page in pages:
         page_chunks = chunk_text(page["text"], chunk_size, overlap)
         for i, chunk in enumerate(page_chunks):
+            if len(chunk.split()) < min_words:
+                continue  # skip near-empty/low-content chunks
             all_chunks.append({
                 "page_num": page["page_num"],
                 "chunk_index": i,
@@ -43,4 +48,4 @@ if __name__ == "__main__":
     chunks = chunk_pages(pages)
     print(f"Total chunks created: {len(chunks)}")
     print(chunks[0])
-    print(chunks[24])  # sanity check a chunk deeper in the book
+    print(chunks[24])

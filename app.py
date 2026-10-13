@@ -53,13 +53,23 @@ if uploaded_file is not None:
 
                 pages = extract_pages(temp_path)
                 chunks = chunk_pages(pages)
-                chunks = embed_chunks(chunks)
-                index, metadata = build_index(chunks)
-                save_index(index, metadata, doc_name)
 
-            st.success(f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!")
-            st.session_state.uploader_key += 1
-            st.rerun()
+                # Only embed and save if there's real text to work with.
+                if chunks:
+                    chunks = embed_chunks(chunks)
+                    index, metadata = build_index(chunks)
+                    save_index(index, metadata, doc_name)
+
+            if not chunks:
+                # No st.rerun() here, so the error stays on screen.
+                st.error(
+                    "No readable text was found in this PDF. It may be a scanned document "
+                    "(images of pages). Try a PDF with selectable text."
+                )
+            else:
+                st.success(f"Processed {len(pages)} pages into {len(chunks)} chunks. Ready for questions!")
+                st.session_state.uploader_key += 1
+                st.rerun()
 
 st.divider()
 
