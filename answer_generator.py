@@ -26,6 +26,10 @@ def generate_answer(question, doc_name, top_k=3):
     question_embedding = model.encode(question)
     results = search(question_embedding, index, metadata, top_k=top_k)
 
+    # search() returns [] for an empty index; results[0] below would crash on that.
+    if not results:
+        return "This document has no searchable content. Please re-process it and try again."
+
     print("Retrieved chunk distances:", [round(r["distance"], 4) for r in results])
 
     best_distance = results[0]["distance"]
