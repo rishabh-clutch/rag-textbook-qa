@@ -1,5 +1,6 @@
 import faiss
 import hashlib
+import json
 import numpy as np
 import pickle
 import os
@@ -8,6 +9,7 @@ import re
 from embedder import embed_chunks
 from chunker import chunk_pages
 from pdf_parser import extract_pages
+from vocab import extract_vocab, extract_doc_words
 
 INDEX_DIR = "indexes"
 
@@ -57,33 +59,80 @@ def build_index(chunks):
 
 def save_index(index, metadata, doc_name):
     """
-    Saves the index and metadata using a filename derived from doc_name.
+    Saves the index, metadata and speech vocabulary using a filename derived from doc_name.
     Writes to temp files first, then renames them, so a failure halfway
-    never leaves a .index without its _metadata.pkl.
+    never leaves a .index without its _metadata.pkl and _vocab.json.
     """
     os.makedirs(INDEX_DIR, exist_ok=True)
     safe_name = sanitize_filename(doc_name)
 
     index_path = os.path.join(INDEX_DIR, f"{safe_name}.index")
     metadata_path = os.path.join(INDEX_DIR, f"{safe_name}_metadata.pkl")
+    vocab_path = _vocab_path(safe_name)
     # Temp names don't end in ".index", so list_available_documents ignores them.
     index_tmp = index_path + ".tmp"
     metadata_tmp = metadata_path + ".tmp"
+    vocab_tmp = vocab_path + ".tmp"
+
+    vocab = _build_vocab(metadata)
 
     try:
         with open(metadata_tmp, "wb") as f:
             pickle.dump(metadata, f)
+        with open(vocab_tmp, "w", encoding="utf-8") as f:
+            json.dump(vocab, f)
         faiss.write_index(index, index_tmp)
 
-        # Rename metadata first and the .index last: once the .index exists,
-        # the document is visible, and its metadata is guaranteed to be there.
+        # Rename the .index last: once it exists, the document is visible,
+        # and its metadata and vocabulary are guaranteed to be there.
         os.replace(metadata_tmp, metadata_path)
+        os.replace(vocab_tmp, vocab_path)
         os.replace(index_tmp, index_path)
     except Exception:
-        for path in (index_tmp, metadata_tmp):
+        for path in (index_tmp, metadata_tmp, vocab_tmp):
             if os.path.exists(path):
                 os.remove(path)
         raise
+
+
+def _vocab_path(safe_name):
+    return os.path.join(INDEX_DIR, f"{safe_name}_vocab.json")
+
+
+def _build_vocab(metadata):
+    whisper_terms, correction_terms = extract_vocab(metadata)
+    return {
+        "whisper": whisper_terms,
+        "correction": correction_terms,
+        "doc_words": extract_doc_words(metadata),
+    }
+
+
+def load_vocab(doc_name):
+    """
+    Returns (whisper_terms, correction_terms, doc_words) for a document.
+    Older indexes have no _vocab.json (or an older one without doc_words):
+    it's computed from the saved metadata, saved (temp-then-rename) for next time, and returned.
+    """
+    safe_name = sanitize_filename(doc_name)
+    vocab_path = _vocab_path(safe_name)
+
+    if os.path.exists(vocab_path):
+        try:
+            with open(vocab_path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data["whisper"], data["correction"], set(data["doc_words"])
+        except (json.JSONDecodeError, KeyError):
+            pass  # damaged or outdated file: rebuild it below
+
+    with open(os.path.join(INDEX_DIR, f"{safe_name}_metadata.pkl"), "rb") as f:
+        metadata = pickle.load(f)
+    vocab = _build_vocab(metadata)
+
+    with open(vocab_path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(vocab, f)
+    os.replace(vocab_path + ".tmp", vocab_path)
+    return vocab["whisper"], vocab["correction"], set(vocab["doc_words"])
 
 
 def load_index(doc_name):

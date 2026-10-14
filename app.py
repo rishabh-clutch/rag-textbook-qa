@@ -1,9 +1,10 @@
 import streamlit as st
+import hashlib
 import os
 import re
 import traceback
 
-from groq import InternalServerError, RateLimitError
+from groq import APIConnectionError, InternalServerError, RateLimitError
 
 from pdf_parser import extract_pages, ocr_pages, OCR_CACHE_DIR
 from ocr import transcribe_image, MAX_OCR_PAGES, PageTooDenseError, DailyLimitError
@@ -13,6 +14,8 @@ from vector_store import (
     build_index, save_index, list_available_documents,
     sanitize_filename, short_file_hash, find_document_by_hash
 )
+from vector_store import load_vocab
+from speech import voice_to_question, NoSpeechError
 from answer_generator import generate_answer
 from quiz_generator import generate_quiz
 
@@ -170,7 +173,39 @@ else:
     tab1, tab2 = st.tabs(["Ask a Question", "Generate Quiz"])
 
     with tab1:
-        question = st.text_input("Enter your question:")
+        recording = st.audio_input("Ask by voice (or type below):")
+
+        if recording is not None:
+            audio_bytes = recording.getvalue()
+            audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+
+            # Only a NEW recording is transcribed. Reruns with the same recording do nothing,
+            # so edits the user makes in the question box are never overwritten.
+            if audio_hash != st.session_state.get("last_audio_hash"):
+                st.session_state.last_audio_hash = audio_hash
+                st.session_state.pop("voice_heard", None)
+                try:
+                    with st.spinner("Transcribing your question..."):
+                        whisper_terms, correction_terms, doc_words = load_vocab(selected_doc)
+                        spoken_question, heard = voice_to_question(
+                            audio_bytes, whisper_terms, correction_terms, doc_words
+                        )
+                    # Set before the text box is drawn below; Streamlit doesn't allow it after.
+                    st.session_state.question = spoken_question
+                    if spoken_question != heard:
+                        st.session_state.voice_heard = heard
+                except NoSpeechError:
+                    st.warning("Couldn't hear a question, please try again.")
+                except (RateLimitError, InternalServerError, APIConnectionError):
+                    traceback.print_exc()
+                    st.error("Voice input is busy right now. Please try again or type your question.")
+                except Exception:
+                    traceback.print_exc()
+                    st.error("Voice input failed. Please type your question instead.")
+
+        question = st.text_input("Enter your question:", key="question")
+        if "voice_heard" in st.session_state:
+            st.caption(f'Whisper heard: "{st.session_state.voice_heard}"')
 
         if st.button("Get Answer"):
             if question:
